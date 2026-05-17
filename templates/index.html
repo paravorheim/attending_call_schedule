@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attending Call Scheduler</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  body { background:#f8f9fa; }
+  .nav-tabs .nav-link.active { font-weight:600; }
+  .badge-preferred { background:#0d6efd; }
+  .badge-holiday   { background:#dc3545; }
+  .badge-unfilled  { background:#ffc107; color:#000; }
+  .warn-text { color:#856404; font-size:.8rem; }
+  textarea.date-input { font-family:monospace; font-size:.85rem; }
+  .schedule-table td, .schedule-table th { vertical-align:middle; font-size:.9rem; }
+  .holiday-row { background:#fff3cd; }
+  .preferred-row { background:#d1e7dd; }
+  .unfilled-row { background:#f8d7da; }
+  #spinner { display:none; }
+  .raw-text { font-size:.78rem; color:#6c757d; white-space:pre-wrap; max-height:120px; overflow-y:auto; }
+  .stat-card { border-left:4px solid; padding:.75rem 1rem; border-radius:4px; background:#fff; }
+  .stat-card.ft  { border-color:#0d6efd; }
+  .stat-card.pt  { border-color:#6f42c1; }
+  .stat-card.pt1 { border-color:#fd7e14; }
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark bg-dark px-4 mb-0">
+  <span class="navbar-brand fw-bold">Attending Call Scheduler
+    <small id="filenameLabel" class="text-secondary fw-normal ms-2" style="font-size:.75rem"></small>
+  </span>
+  <div class="d-flex align-items-center gap-2">
+    <div id="spinner" class="spinner-border spinner-border-sm text-light" role="status"></div>
+    <button class="btn btn-outline-light btn-sm" onclick="loadExcel()">Reload default</button>
+    <button class="btn btn-success btn-sm" onclick="document.getElementById('xlsxUpload').click()">
+      Upload Excel…
+    </button>
+    <input type="file" id="xlsxUpload" accept=".xlsx,.xlsm" style="display:none"
+           onchange="uploadExcel(this)">
+  </div>
+</nav>
+
+<div class="container-fluid px-4 pt-3">
+  <div id="alertBox"></div>
+
+  <ul class="nav nav-tabs mb-3" id="mainTabs">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabAttend">Attendings</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabSettings">Settings</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabSchedule">Schedule</button></li>
+  </ul>
+
+  <div class="tab-content">
+
+    <!-- ══════════ ATTENDINGS TAB ══════════ -->
+    <div class="tab-pane fade show active" id="tabAttend">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="mb-0">Attendings <small class="text-muted fs-6" id="attendCount"></small></h5>
+        <button class="btn btn-sm btn-success" onclick="addAttending()">+ Add Attending</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-bordered table-hover align-middle" id="attendTable">
+          <thead class="table-dark">
+            <tr>
+              <th style="width:200px">Name</th>
+              <th style="width:130px">Status</th>
+              <th>Absences <small class="fw-normal">(MM/DD/YY, one per line)</small></th>
+              <th>Preferences <small class="fw-normal">(MM/DD/YY, one per line)</small></th>
+              <th style="width:90px"></th>
+            </tr>
+          </thead>
+          <tbody id="attendBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ══════════ SETTINGS TAB ══════════ -->
+    <div class="tab-pane fade" id="tabSettings">
+      <div class="row g-4">
+
+        <!-- Date range -->
+        <div class="col-md-4">
+          <div class="card h-100">
+            <div class="card-header fw-semibold">Schedule Date Range</div>
+            <div class="card-body">
+              <label class="form-label">Start date</label>
+              <input type="date" id="startDate" class="form-control mb-3" value="2025-07-11">
+              <label class="form-label">End date</label>
+              <input type="date" id="endDate" class="form-control">
+            </div>
+          </div>
+        </div>
+
+        <!-- Holidays -->
+        <div class="col-md-4">
+          <div class="card h-100">
+            <div class="card-header fw-semibold">Holiday Dates</div>
+            <div class="card-body" id="holidayList" style="font-size:.9rem"></div>
+          </div>
+        </div>
+
+        <!-- Holidays 2-year history -->
+        <div class="col-md-4">
+          <div class="card h-100">
+            <div class="card-header fw-semibold">Holiday Exclusions (past 2 yrs)
+              <span class="badge bg-secondary ms-1" title="Attendings in this list will not be assigned holiday weeks">?</span>
+            </div>
+            <div class="card-body">
+              <p class="text-muted small">Auto-detected from Holiday Counter sheet. Un-check to allow assignment to holiday weeks.</p>
+              <div id="h2yList"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ══════════ SCHEDULE TAB ══════════ -->
+    <div class="tab-pane fade" id="tabSchedule">
+      <div class="d-flex align-items-center gap-3 mb-3">
+        <button class="btn btn-primary" onclick="generateSchedule()">Generate Schedule</button>
+        <button class="btn btn-outline-secondary" onclick="generateSchedule()" title="Re-run with different random seed">Regenerate</button>
+        <button class="btn btn-outline-success" id="exportBtn" onclick="exportExcel()" style="display:none">Export to Excel</button>
+        <div id="scheduleStats" class="ms-auto"></div>
+      </div>
+
+      <!-- Summary cards -->
+      <div class="row g-2 mb-3" id="summaryCards"></div>
+
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered schedule-table" id="scheduleTable">
+          <thead class="table-dark">
+            <tr>
+              <th style="width:110px">Week of</th>
+              <th style="width:110px">Week ending</th>
+              <th>Attending</th>
+              <th style="width:180px">Notes</th>
+            </tr>
+          </thead>
+          <tbody id="scheduleBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /tab-content -->
+</div><!-- /container -->
+
+<!-- ══════════ EDIT MODAL ══════════ -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit Attending</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editIdx">
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Full Name</label>
+          <input type="text" class="form-control" id="editName">
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Status</label>
+          <select class="form-select" id="editStatus">
+            <option value="full time">Full Time</option>
+            <option value="part time">Part Time</option>
+            <option value="part time 1">Part Time (1 week)</option>
+          </select>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Absences</label>
+            <small class="text-muted d-block mb-1">One date or range per line, e.g. <code>9/1/25</code> or <code>9/1/25-9/7/25</code></small>
+            <div id="rawAbsLabel" class="raw-text mb-1 border rounded p-1" style="max-height:80px"></div>
+            <textarea class="form-control date-input" id="editAbsences" rows="8"></textarea>
+            <div id="absWarn" class="warn-text mt-1"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-semibold">Preferences</label>
+            <small class="text-muted d-block mb-1">Weeks the attending <em>wants</em> to be on call</small>
+            <div id="rawPrefLabel" class="raw-text mb-1 border rounded p-1" style="max-height:80px"></div>
+            <textarea class="form-control date-input" id="editPreferences" rows="8"></textarea>
+            <div id="prefWarn" class="warn-text mt-1"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="saveEdit()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let state = {
+  attendings: [],
+  holidays: {},
+  h2y: [],   // holidays_two_years (full names)
+  lastSchedule: null,
+};
+let editModal;
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  editModal = new bootstrap.Modal(document.getElementById('editModal'));
+  loadExcel();
+});
+
+// ─── Alert ────────────────────────────────────────────────────────────────────
+function showAlert(msg, type='danger') {
+  document.getElementById('alertBox').innerHTML =
+    `<div class="alert alert-${type} alert-dismissible fade show" role="alert">${msg}
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>`;
+}
+
+// ─── Spinner ─────────────────────────────────────────────────────────────────
+function spin(on) {
+  document.getElementById('spinner').style.display = on ? 'inline-block' : 'none';
+}
+
+// ─── Load Excel ───────────────────────────────────────────────────────────────
+function applyExcelData(data) {
+  state.attendings = data.attendings;
+  state.holidays   = data.holidays;
+  state.h2y        = data.holiday_data.holidays_two_years;
+  document.getElementById('startDate').value = data.start_date;
+  document.getElementById('endDate').value   = data.end_date;
+  document.getElementById('filenameLabel').textContent = data.filename || 'default file';
+  renderAttendTable();
+  renderHolidayList();
+  renderH2Y(data.holiday_data);
+}
+
+async function loadExcel() {
+  spin(true);
+  try {
+    const res = await fetch('/api/load-excel');
+    const data = await res.json();
+    if (data.error) { showAlert(data.error); return; }
+    applyExcelData(data);
+    showAlert(`Loaded ${state.attendings.length} attendings from default Excel file.`, 'success');
+  } catch(e) {
+    showAlert('Failed to load Excel: ' + e);
+  } finally { spin(false); }
+}
+
+async function uploadExcel(input) {
+  if (!input.files.length) return;
+  const file = input.files[0];
+  input.value = '';   // reset so same file can be re-uploaded
+  spin(true);
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/upload-excel', { method: 'POST', body: form });
+    const data = await res.json();
+    if (data.error) { showAlert(data.error); return; }
+    applyExcelData(data);
+    showAlert(`Loaded ${state.attendings.length} attendings from <strong>${data.filename}</strong>.`, 'success');
+  } catch(e) {
+    showAlert('Failed to upload Excel: ' + e);
+  } finally { spin(false); }
+}
+
+// ─── Attendings table ─────────────────────────────────────────────────────────
+function renderAttendTable() {
+  const tbody = document.getElementById('attendBody');
+  tbody.innerHTML = '';
+  state.attendings.forEach((a, i) => {
+    const absText  = (a.absences  || []).join('\n');
+    const prefText = (a.preferences || []).join('\n');
+    const warnAbs  = (a.warn_absences  || []).length;
+    const warnPref = (a.warn_preferences || []).length;
+    const badgeW   = (warnAbs || warnPref)
+      ? `<span class="badge bg-warning text-dark ms-1" title="Some dates could not be auto-parsed">⚠ ${warnAbs+warnPref}</span>` : '';
+    const statusBadge = {
+      'full time':   '<span class="badge bg-primary">Full Time</span>',
+      'part time':   '<span class="badge bg-purple" style="background:#6f42c1">Part Time</span>',
+      'part time 1': '<span class="badge bg-warning text-dark">PT-1wk</span>',
+    }[a.status] || '';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${esc(a.name)}</strong>${badgeW}</td>
+      <td>${statusBadge}</td>
+      <td><pre class="mb-0" style="font-size:.8rem;white-space:pre-wrap">${esc(absText) || '<span class="text-muted">—</span>'}</pre></td>
+      <td><pre class="mb-0" style="font-size:.8rem;white-space:pre-wrap">${esc(prefText) || '<span class="text-muted">—</span>'}</pre></td>
+      <td class="text-center">
+        <button class="btn btn-sm btn-outline-primary me-1" onclick="openEdit(${i})">Edit</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteRow(${i})">✕</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('attendCount').textContent = `(${state.attendings.length})`;
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── Edit modal ───────────────────────────────────────────────────────────────
+function openEdit(i) {
+  const a = state.attendings[i];
+  document.getElementById('editIdx').value        = i;
+  document.getElementById('editName').value       = a.name;
+  document.getElementById('editStatus').value     = a.status;
+  document.getElementById('editAbsences').value   = (a.absences  || []).join('\n');
+  document.getElementById('editPreferences').value= (a.preferences|| []).join('\n');
+  document.getElementById('rawAbsLabel').textContent  = a.raw_absences  || '';
+  document.getElementById('rawPrefLabel').textContent = a.raw_preferences|| '';
+  const wa = (a.warn_absences  || []);
+  const wp = (a.warn_preferences || []);
+  document.getElementById('absWarn').textContent  = wa.length ? 'Could not parse: ' + wa.join(' | ') : '';
+  document.getElementById('prefWarn').textContent = wp.length ? 'Could not parse: ' + wp.join(' | ') : '';
+  editModal.show();
+}
+
+function saveEdit() {
+  const i = parseInt(document.getElementById('editIdx').value);
+  const a = state.attendings[i];
+  a.name        = document.getElementById('editName').value.trim();
+  a.status      = document.getElementById('editStatus').value;
+  a.absences    = document.getElementById('editAbsences').value
+                    .split('\n').map(s=>s.trim()).filter(Boolean);
+  a.preferences = document.getElementById('editPreferences').value
+                    .split('\n').map(s=>s.trim()).filter(Boolean);
+  editModal.hide();
+  renderAttendTable();
+}
+
+function deleteRow(i) {
+  if (!confirm(`Remove ${state.attendings[i].name}?`)) return;
+  state.attendings.splice(i, 1);
+  renderAttendTable();
+}
+
+function addAttending() {
+  state.attendings.push({ name:'New Attending', status:'full time', absences:[], preferences:[], raw_absences:'', raw_preferences:'', warn_absences:[], warn_preferences:[] });
+  renderAttendTable();
+  openEdit(state.attendings.length - 1);
+}
+
+// ─── Holiday list ─────────────────────────────────────────────────────────────
+function renderHolidayList() {
+  const el = document.getElementById('holidayList');
+  el.innerHTML = '';
+  Object.entries(state.holidays).forEach(([k, v]) => {
+    const label = k.replace(/_/g,' ').replace(/\b\w/g, c=>c.toUpperCase());
+    el.innerHTML += `
+      <div class="d-flex align-items-center mb-2 gap-2">
+        <label class="text-nowrap" style="width:140px;font-size:.9rem">${esc(label)}</label>
+        <input type="date" class="form-control form-control-sm" value="${v}"
+               onchange="state.holidays['${k}']=this.value">
+      </div>`;
+  });
+}
+
+// ─── H2Y checklist ────────────────────────────────────────────────────────────
+function renderH2Y(holiday_data) {
+  const el = document.getElementById('h2yList');
+  el.innerHTML = '';
+  const all = [...new Set([...holiday_data.last_year, ...holiday_data.two_years_ago])].sort();
+  all.forEach(name => {
+    const checked = state.h2y.includes(name);
+    const yr = holiday_data.last_year.includes(name) ? '25-26' : '';
+    const yr2= holiday_data.two_years_ago.includes(name) ? '24-25' : '';
+    const tag = [yr, yr2].filter(Boolean).join(', ');
+    el.innerHTML += `
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="h2y_${esc(name)}"
+               ${checked?'checked':''} onchange="toggleH2Y('${esc(name)}',this.checked)">
+        <label class="form-check-label" for="h2y_${esc(name)}">
+          ${esc(name)} <small class="text-muted">${tag}</small>
+        </label>
+      </div>`;
+  });
+}
+
+function toggleH2Y(name, on) {
+  if (on) { if (!state.h2y.includes(name)) state.h2y.push(name); }
+  else    { state.h2y = state.h2y.filter(n=>n!==name); }
+}
+
+// ─── Generate Schedule ────────────────────────────────────────────────────────
+async function generateSchedule() {
+  spin(true);
+  document.getElementById('scheduleBody').innerHTML = '';
+  document.getElementById('scheduleStats').innerHTML = '';
+  document.getElementById('summaryCards').innerHTML = '';
+  try {
+    const payload = {
+      attendings:        state.attendings,
+      holidays:          state.holidays,
+      holidays_two_years: state.h2y,
+      start_date:        document.getElementById('startDate').value,
+      end_date:          document.getElementById('endDate').value,
+    };
+    const res  = await fetch('/api/generate', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+    const data = await res.json();
+    if (data.error) { showAlert(data.error); return; }
+
+    state.lastSchedule = data.schedule;
+    document.getElementById('exportBtn').style.display = '';
+    renderSchedule(data.schedule, data.unfilled);
+    // Switch to schedule tab
+    bootstrap.Tab.getOrCreateInstance(
+      document.querySelector('[data-bs-target="#tabSchedule"]')).show();
+  } catch(e) {
+    showAlert('Error generating schedule: ' + e);
+  } finally { spin(false); }
+}
+
+function renderSchedule(schedule, unfilled) {
+  const tbody = document.getElementById('scheduleBody');
+  tbody.innerHTML = '';
+
+  // Count appearances
+  const counts = {};
+  schedule.forEach(row => {
+    const name = row.assignment.replace(' (preferred)', '');
+    if (!name.startsWith('Need to')) counts[name] = (counts[name]||0) + 1;
+  });
+
+  schedule.forEach(row => {
+    const isUnfilled  = row.assignment.includes('Need to');
+    const isPreferred = row.assignment.includes('(preferred)');
+    const displayName = row.assignment.replace(' (preferred)', '');
+    const tr = document.createElement('tr');
+    if (isUnfilled)  tr.classList.add('unfilled-row');
+    else if (row.is_holiday) tr.classList.add('holiday-row');
+    else if (isPreferred)    tr.classList.add('preferred-row');
+
+    const holBadges = row.holidays.map(h =>
+      `<span class="badge badge-holiday bg-danger me-1">${esc(h)}</span>`).join('');
+    const prefBadge = isPreferred
+      ? '<span class="badge bg-success ms-1">preferred</span>' : '';
+    const unfilledBadge = isUnfilled
+      ? '<span class="badge badge-unfilled bg-warning text-dark">⚠ manual</span>' : '';
+
+    tr.innerHTML = `
+      <td>${fmtDate(row.date)}</td>
+      <td>${fmtDate(row.week_end)}</td>
+      <td><strong>${isUnfilled ? '<em class="text-danger">Unassigned</em>' : esc(displayName)}</strong>${prefBadge}${unfilledBadge}</td>
+      <td>${holBadges}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  // Stats
+  const color = unfilled === 0 ? 'success' : (unfilled <= 7 ? 'warning' : 'danger');
+  document.getElementById('scheduleStats').innerHTML =
+    `<span class="badge bg-${color} fs-6">Unfilled: ${unfilled}</span>`;
+
+  // Summary cards
+  const totalWeeks = schedule.length;
+  const cards = document.getElementById('summaryCards');
+  cards.innerHTML = `
+    <div class="col-auto"><div class="stat-card ft"><div class="fw-bold">${totalWeeks}</div><div class="text-muted small">Total weeks</div></div></div>
+    <div class="col-auto"><div class="stat-card pt"><div class="fw-bold">${unfilled}</div><div class="text-muted small">Need manual scheduling</div></div></div>`;
+  Object.entries(counts).sort((a,b)=>b[1]-a[1]).forEach(([name, cnt]) => {
+    cards.innerHTML += `<div class="col-auto"><div class="stat-card ft" style="min-width:120px">
+      <div class="fw-bold">${cnt}</div><div class="text-muted small" style="font-size:.75rem">${esc(name)}</div></div></div>`;
+  });
+}
+
+function fmtDate(iso) {
+  const [y,m,d] = iso.split('-');
+  return `${parseInt(m)}/${parseInt(d)}/${y.slice(2)}`;
+}
+
+// ─── Export to Excel ──────────────────────────────────────────────────────────
+async function exportExcel() {
+  if (!state.lastSchedule) return;
+  spin(true);
+  try {
+    const res = await fetch('/api/export-excel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule: state.lastSchedule }),
+    });
+    if (!res.ok) { showAlert('Export failed'); return; }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'call_schedule.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    showAlert('Export failed: ' + e);
+  } finally { spin(false); }
+}
+</script>
+</body>
+</html>
